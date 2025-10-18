@@ -1,0 +1,7 @@
+{
+    "model_path": "yolo11m.pt",
+    "class_id": [0],
+    "conf": 0.5,
+    "iou": 0.45,
+    "class_name": "person"
+}
