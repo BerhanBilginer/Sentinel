@@ -29,9 +29,13 @@ def main():
 
     detector = detection(config['model_path'])
 
+    # Try video file first, fallback to webcam
     video = video_source('test_cropped.mp4')
     if not video.is_opened():
-        print("Error: Could not open video source"); return
+        print("Video file not found, trying webcam...")
+        video = video_source(0)  # Use webcam
+        if not video.is_opened():
+            print("Error: Could not open video source (file or webcam)"); return
 
     fps = video.get(cv2.CAP_PROP_FPS) or 30.0
     dt_nominal = 1.0 / float(fps if fps and fps > 1e-3 else 30.0)
@@ -55,7 +59,7 @@ def main():
     # ReID (opsiyonel)
     try:
         # kendi ağırlık yolunu ver (yoksa None ile ImageNet pretrain ile de çalışır)
-        reid_weights = "weights/osnet_ain_ms_d_c.pth.tar"  # "weights/osnet_ain_x1_0_msmt17.pth"
+        reid_weights = "weights/osnet_ain_x1_0_msdc.tar"
         reid = ReIDEncoder(model_name="osnet_ain_x1_0", weight_path=reid_weights, half=False)
         print("ReID encoder loaded.")
         reid_debug = True  # Enable to diagnose ID stability issues
@@ -138,7 +142,7 @@ def main():
                 vis_frame = draw_boxes(vis_frame, obj, color=(0, 255, 0), thickness=2)
                 vis_frame = centroids(vis_frame, obj, color=(0, 0, 255), radius=5)
             if show_tracks:
-                vis_frame = draw_kalman_predictions(vis_frame, predictions)
+                vis_frame = draw_kalman_predictions(vis_frame, predictions, min_hits=2)
             if show_gating and predictions and obj:
                 vis_frame = draw_gate_connections(vis_frame, predictions, obj, gate_matrix)
             if show_association and predictions and obj:

@@ -15,9 +15,10 @@ Kutu formatı: (cx, cy, w, h)
 """
 
 from dataclasses import dataclass
-from typing import List, Tuple, Optional, Dict
+from typing import List, Tuple, Optional, Dict, Deque
 import numpy as np
 import math
+from collections import deque
 
 
 # Yaygın χ^2 eşikleri (dof: ölçüm boyutu)
@@ -170,3 +171,64 @@ def build_gate_matrix(
             ok, _ = layered_gates_for_pair(x_pred, P_pred, H, R, z_det, params)
             gate[i, j] = ok
     return gate
+
+
+@dataclass
+class HistoryParams:
+    K_boxes: int = 8          # kaç geçmiş kutu
+    tau_hist_iou: float = 0.25
+    tau_hist_cos: float = 0.70
+    use_or_logic: bool = True  # True: (IoU>=thr) OR (cos>=thr); False: AND
+
+def _cosine_max_to_bank(det_feat: Optional[np.ndarray], bank: Deque[np.ndarray]) -> float:
+    if det_feat is None or bank is None or len(bank) == 0:
+        return -1.0
+    det = det_feat.astype(np.float32)
+    best = -1.0
+    for f in bank:
+        if f is None:
+            continue
+        denom = max(1e-12, np.linalg.norm(det) * np.linalg.norm(f))
+        cs = float(np.dot(det, f) / denom)
+        if cs > best:
+            best = cs
+    return best
+
+def _iou_max_to_bbox_hist(det_z: np.ndarray, bbox_hist: Deque[np.ndarray]) -> float:
+    if bbox_hist is None or len(bbox_hist) == 0:
+        return 0.0
+    best = 0.0
+    for b in bbox_hist:
+        # b ve det_z formatı [cx,cy,w,h]
+        i = iou_cxcywh(b, det_z)
+        if i > best:
+            best = i
+    return float(best)
+
+def build_history_mask(
+    tracks_bbox_hist: List[Deque[np.ndarray]],     # her track: deque([cx,cy,w,h], ...)
+    tracks_feat_bank: List[Deque[np.ndarray]],     # her track: deque(feat, ...)
+    dets: List[np.ndarray],                        # her det: z = [cx,cy,w,h]
+    det_feats: List[Optional[np.ndarray]],         # her det: feat (veya None)
+    hp: HistoryParams,
+) -> np.ndarray:
+    """
+    history_mask[i,j] = True  ⇔  (IoU_hist_max >= τ)  OR/AND  (cos_hist_max >= τ)
+    """
+    T, D = len(tracks_bbox_hist), len(dets)
+    mask = np.zeros((T, D), dtype=bool)
+    for i in range(T):
+        bbox_hist = tracks_bbox_hist[i]
+        feat_bank = tracks_feat_bank[i]
+        for j in range(D):
+            z = dets[j]
+            f = det_feats[j] if det_feats is not None and j < len(det_feats) else None
+            iou_h = _iou_max_to_bbox_hist(z, bbox_hist)
+            cos_h = _cosine_max_to_bank(f, feat_bank)
+            if hp.use_or_logic:
+                ok = (iou_h >= hp.tau_hist_iou) or (cos_h >= hp.tau_hist_cos)
+            else:
+                # daha katı: ikisini de iste
+                ok = (iou_h >= hp.tau_hist_iou) and (cos_h >= hp.tau_hist_cos)
+            mask[i, j] = ok
+    return mask

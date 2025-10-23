@@ -22,22 +22,32 @@ def centroids(frame: np.ndarray, boxes: list, color=(0, 0, 255), radius=5):
         cv2.circle(frame, (center_x, center_y), radius, color, -1)
     return frame
 
-def draw_kalman_predictions(frame: np.ndarray, predictions: list):
-    """Draw Kalman predictions (blue/orange/gray by staleness)."""
+def draw_kalman_predictions(frame: np.ndarray, predictions: list, min_hits: int = 0):
+    """Draw Kalman predictions with color-coded track status:
+    - Green: actively tracked (time_since_update = 0)
+    - Yellow: recently lost (time_since_update < 3)
+    - Orange: moderately lost (time_since_update < 8)
+    - Red: critically lost (time_since_update >= 8)
+    Only draw tracks with hits >= min_hits.
+    """
     for pred in predictions:
+        if pred.get('hits', 0) < min_hits:
+            continue
+
         track_id = pred['track_id']
         cx, cy = pred['center']
         bbox = pred['bbox']  # [cx, cy, w, h]
-        age = pred['age']
         time_since_update = pred.get('time_since_update', 0)
 
-        # Color based on update status
+        # Color based on update status (BGR format)
         if time_since_update == 0:
-            color = (255, 0, 0)        # blue - recently updated
-        elif time_since_update < 5:
-            color = (255, 165, 0)      # orange - not recently updated
+            color = (0, 255, 0)        # bright green - actively tracked
+        elif time_since_update < 3:
+            color = (0, 255, 255)      # yellow - recently lost
+        elif time_since_update < 8:
+            color = (0, 165, 255)      # orange - moderately lost
         else:
-            color = (128, 128, 128)    # gray - stale
+            color = (0, 0, 255)        # red - critically lost
 
         # Predicted center
         cv2.circle(frame, (int(cx), int(cy)), 8, color, -1)
@@ -49,7 +59,8 @@ def draw_kalman_predictions(frame: np.ndarray, predictions: list):
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
 
         # Track ID
-        cv2.putText(frame, f"ID:{track_id}", (int(cx-20), int(cy-15)),
+        shown_id = pred.get('display_id', track_id)
+        cv2.putText(frame, f"ID:{shown_id}", (int(cx-20), int(cy-15)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
         if time_since_update > 0:
@@ -149,8 +160,24 @@ def draw_legend(frame: np.ndarray, show_gating=True, show_association=True):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
     y += line_height
 
-    cv2.rectangle(frame, (legend_x, y-15), (legend_x+20, y-5), (255, 0, 0), 2)
+    # Track status legend
+    cv2.rectangle(frame, (legend_x, y-15), (legend_x+20, y-5), (0, 255, 0), 2)
     cv2.putText(frame, "Active Tracks", (legend_x+25, y),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+    y += line_height
+    
+    cv2.rectangle(frame, (legend_x, y-15), (legend_x+20, y-5), (0, 255, 255), 2)
+    cv2.putText(frame, "Recently Lost", (legend_x+25, y),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+    y += line_height
+    
+    cv2.rectangle(frame, (legend_x, y-15), (legend_x+20, y-5), (0, 165, 255), 2)
+    cv2.putText(frame, "Moderately Lost", (legend_x+25, y),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+    y += line_height
+    
+    cv2.rectangle(frame, (legend_x, y-15), (legend_x+20, y-5), (0, 0, 255), 2)
+    cv2.putText(frame, "Critically Lost", (legend_x+25, y),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
     y += line_height
 
@@ -176,8 +203,7 @@ def draw_legend(frame: np.ndarray, show_gating=True, show_association=True):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
     return frame
 
-# --- NEW: ID panel & ID-only overlays ---
-
+# --- ID panel & ID-only overlays ---
 def draw_id_panel(frame: np.ndarray, predictions: list):
     """Top-left translucent panel listing active track IDs."""
     if frame is None or not predictions:
@@ -195,8 +221,8 @@ def draw_id_panel(frame: np.ndarray, predictions: list):
 
     yy = y + 45
     for p in predictions:
-        tid = p['track_id']; age = p.get('age', 0); lost = p.get('time_since_update', 0)
-        line = f"ID:{tid:3d}  age:{age:3d}  lost:{lost:2d}"
+        tid = p.get('display_id', p['track_id']); age = p.get('age', 0); lost = p.get('time_since_update', 0); hits = p.get('hits', 0)
+        line = f"ID:{tid:3d}  age:{age:3d}  lost:{lost:2d}  hits:{hits:2d}"
         cv2.putText(frame, line, (x + 10, yy),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 255, 200), 1)
         yy += 20
@@ -209,10 +235,60 @@ def draw_id_only(frame: np.ndarray, predictions: list):
     if frame is None or not predictions:
         return frame
     for p in predictions:
-        tid = p['track_id']
+        tid = p.get('display_id', p['track_id'])
         cx, cy = int(p['center'][0]), int(p['center'][1])
         cv2.putText(frame, f"{tid}", (cx - 10, cy - 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)  # thick white
         cv2.putText(frame, f"{tid}", (cx - 10, cy - 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 0), 1)        # black outline
+    return frame
+
+
+def draw_edge_points(frame: np.ndarray, predictions: list, min_hits: int = 0):
+    """Draw corner points for tracks with edge tracking enabled."""
+    if frame is None or not predictions:
+        return frame
+        
+    for pred in predictions:
+        if pred.get('hits', 0) < min_hits:
+            continue
+            
+        corners = pred.get('corners')
+        if corners is None:
+            continue
+            
+        track_id = pred['track_id']
+        shown_id = pred.get('display_id', track_id)
+        time_since_update = pred.get('time_since_update', 0)
+        
+        # Color based on update status (same as main tracking)
+        if time_since_update == 0:
+            color = (0, 255, 0)        # bright green - actively tracked
+        elif time_since_update < 3:
+            color = (0, 255, 255)      # yellow - recently lost
+        elif time_since_update < 8:
+            color = (0, 165, 255)      # orange - moderately lost
+        else:
+            color = (0, 0, 255)        # red - critically lost
+        
+        # Draw corner points
+        for i, (x, y) in enumerate(corners):
+            cv2.circle(frame, (int(x), int(y)), 4, color, -1)
+            # Label corners: TL, TR, BR, BL
+            labels = ['TL', 'TR', 'BR', 'BL']
+            cv2.putText(frame, labels[i], (int(x+5), int(y-5)),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.3, color, 1)
+        
+        # Draw lines connecting corners to form quadrilateral
+        for i in range(4):
+            pt1 = (int(corners[i][0]), int(corners[i][1]))
+            pt2 = (int(corners[(i+1)%4][0]), int(corners[(i+1)%4][1]))
+            cv2.line(frame, pt1, pt2, color, 1)
+        
+        # Draw track ID at center
+        cx = sum(c[0] for c in corners) / 4
+        cy = sum(c[1] for c in corners) / 4
+        cv2.putText(frame, f"ID:{shown_id}", (int(cx-15), int(cy)),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+    
     return frame
