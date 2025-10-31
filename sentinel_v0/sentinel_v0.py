@@ -108,6 +108,32 @@ def occlusion_scores(det_masks, occ_thr_rel=0.35, occ_min_percent=0.05,
                 front_of[j].add(i); behind[i].add(j)
     return front_of, behind
 
+def find_multi_overlap_indices(det_masks, k=3, min_percent=0.15):
+    """
+    3+ maskenin aynı piksel bölgesini paylaştığı (crowd) durumları bulur.
+    Alan yüzdesi üzerinden değerlendirir (occlusion detection gibi).
+    Dönen: crowd'a dahil olan detection indexlerinin set'i.
+    """
+    if len(det_masks) < k:
+        return set()
+    masks = [m for (m, _) in det_masks]
+    areas = [float(m.sum()) for m in masks]
+    H, W = masks[0].shape
+    accum = np.zeros((H, W), dtype=np.uint16)
+    for m in masks:
+        if m is not None and m.any():
+            accum[m] += 1
+    crowd_region = accum >= k
+    if not crowd_region.any():
+        return set()
+    involved = set()
+    for i, m in enumerate(masks):
+        inter = np.logical_and(m, crowd_region).sum()
+        overlap_percent = inter / max(areas[i], 1.0)  # What % of mask i overlaps with crowd
+        if overlap_percent >= min_percent:
+            involved.add(i)
+    return involved 
+
 # ============ ReID Özellik Çıkarıcı (ResNet18/50 + GeM opsiyonu) ============
 class GeM(nn.Module):
     def __init__(self, p=3.0, eps=1e-6):
@@ -221,6 +247,7 @@ class Track:
         # Occlusion state
         self.is_behind = False
         self.is_in_front = False
+        self.is_crowd_frozen = False
 
 # ============ Galeri (TTL'li uzun süreli hafıza) ============
 class Gallery:
@@ -510,6 +537,34 @@ def main(args):
                         logger.info(f"  Det{i}: IN FRONT (occluding: {', '.join(occlusion_info)})")
                 n_behind = sum(behind_flags)
                 logger.info(f"  Summary: {n_behind} detections behind, {len(det_masks)-n_behind} in front/clear")
+
+        # ---- Crowd (3+ overlap) dondurma ----
+        if det_masks:
+            crowd_idxs = find_multi_overlap_indices(
+                det_masks,
+                k=args.multi_overlap_k,
+                min_percent=args.multi_overlap_min_percent
+            )
+            if crowd_idxs:
+                logger.info(f"[F{frame_idx:04d}] CROWD: {len(crowd_idxs)} detection overlap (k>={args.multi_overlap_k})")
+                # Crowd içindeki her detection için en yakın track'i bul ve dondur
+                for j in crowd_idxs:
+                    _, det_box = det_masks[j]
+                    bx, by = center(det_box)
+                    near_t, best = None, 1e18
+                    for t_idx, t in enumerate(tracks):
+                        cx, cy = center(t.bbox)
+                        d2 = (cx - bx)**2 + (cy - by)**2
+                        if d2 < best:
+                            best, near_t = d2, t_idx
+                    if near_t is not None and (best**0.5) <= FREEZE_DIST:
+                        t = tracks[near_t]
+                        t.frozen_until = max(t.frozen_until, frame_idx + args.freeze_frames_multi)
+                        t.is_crowd_frozen = True
+                        # Occlusion state'leri crowd sırasında anlamlı olmayabilir; nötrle
+                        t.is_behind = False
+                        t.is_in_front = False
+                        logger.info(f"  -> Freeze ID{t.id} due to CROWD (dist={best**0.5:.1f}px) until {t.frozen_until}")
 
         # ---- Assignment (IoU + Appearance) ----
         if not det_masks:
@@ -804,7 +859,11 @@ def main(args):
                 color = LIGHT_BLUE
             cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
             label = f"ID {t.id}"
-            if t.frozen_until >= frame_idx: label += " (FROZEN)"
+            if t.frozen_until >= frame_idx:
+                if getattr(t, 'is_crowd_frozen', False):
+                    label += " (CROWD)"
+                else:
+                    label += " (FROZEN)"
             cv2.putText(vis, label, (x1, max(0, y1-6)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
         # Store frame in buffer (enabled in debug mode, or when paused in normal mode)
@@ -906,6 +965,14 @@ if __name__ == "__main__":
     # ReID aç/kapat
     ap.add_argument("--no_reid", action="store_true",
                     help="ReID appearance maliyetini devre dışı bırak")
+
+    ap.add_argument("--multi_overlap_k", type=int, default=3,
+                help="Aynı bölgede en az kaç maske varsa crowd sayılır")
+    ap.add_argument("--multi_overlap_min_percent", type=float, default=0.15,
+                    help="Crowd bölgesiyle kesişim için minimum alan yüzdesi (0.0-1.0)")
+    ap.add_argument("--freeze_frames_multi", type=int, default=20,
+                    help="3+ overlap için freeze süresi (frame)")
+
     # Görselleştirme
     ap.add_argument("--show", action="store_true")
     ap.add_argument("--max_frames", type=int, default=0)

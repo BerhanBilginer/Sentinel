@@ -1,0 +1,35 @@
+================================================================================
+SAM HF Freeze Tracker - Log Started
+Time: 2025-10-30 16:41:06
+Video: ../test_cropped.mp4
+Log file: logs/tracker_test_cropped_20251030_164106.log
+================================================================================
+
+Device: cuda
+[INFO] ReID backbone: R50 (dim=2048) | GeM=on
+Debug mode: ENABLED
+Controls: SPACE=pause/resume, A=prev (when paused), D=next (when paused), Q=quit
+[DEBUG] Frame buffering enabled - detailed logging active
+
+================================================================================
+[F0000] FRAME PROCESSING START
+================================================================================
+
+[YOLO] Detected 5 objects (after filtering)
+  Det0: bbox=[1022, 310, 1070, 460], conf=0.843, class=0, area=7200px
+  Det1: bbox=[311, 290, 362, 371], conf=0.792, class=0, area=4131px
+  Det2: bbox=[1197, 351, 1249, 517], conf=0.746, class=0, area=8632px
+  Det3: bbox=[245, 303, 290, 381], conf=0.665, class=0, area=3510px
+  Det4: bbox=[284, 296, 326, 378], conf=0.634, class=0, area=3444px
+
+[SAM] Generating masks for 5 detections...
+  Det0: mask_pixels=10337, fill_ratio=143.57%
+  Det1: mask_pixels=5352, fill_ratio=129.56%
+  Det2: mask_pixels=12981, fill_ratio=150.38%
+  Det3: mask_pixels=5195, fill_ratio=148.01%
+  Det4: mask_pixels=5039, fill_ratio=146.31%
+
+[ReID] Extracted 5 feature vectors (dim=2056)
+
+[OCCLUSION] Analyzing 5 masks...
+  Summary: 0 detections behind, 5 in front/clear
